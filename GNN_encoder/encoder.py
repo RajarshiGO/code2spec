@@ -15,8 +15,7 @@ class gnn_encoder(nn.Module):
     ):
         super(gnn_encoder, self).__init__()
 
-        self.node_embedding = nn.Embedding(vocab_size, hidden_dim)  # etc...
-        self.node_embedding = nn.Embedding(vocab_size, hidden_dim)  # etc...
+        self.node_embedding = nn.Embedding(vocab_size, hidden_dim)
         self.msg_op = graphOP(hidden_dim, num_edge_types)
         self.gru = nn.GRUCell(hidden_dim, hidden_dim)
         self.num_edge_types = num_edge_types
