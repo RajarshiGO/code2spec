@@ -1,0 +1,3 @@
+(executable
+ (name cex_eval)
+ (libraries yojson))

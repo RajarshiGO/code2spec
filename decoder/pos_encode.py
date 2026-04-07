@@ -1,24 +1,32 @@
+import torch
 import torch.nn as nn
 
 
-
 class TreePosEncode(nn.Module):
-    def __init__(self, d_model, max_depth=50, max_width=20):
-        super(TreePosEncode, self).__init__()
-        self.depth_embed = nn.Embedding(max_depth, d_model)
-        self.width_embed = nn.Embedding(max_width, d_model)
-        nn.init.uniform_(self.depth_embed.weight, -0.05, 0.05)
-        nn.init.uniform_(self.width_embed.weight, -0.05, 0.05)
+    def __init__(self, d_model: int, max_branch: int = 3):
+        super().__init__()
+        self.d_model = d_model
+        self.max_branch = max_branch
+        self.down_matrices = nn.ParameterList(
+            [
+                nn.Parameter(torch.eye(d_model) + 0.01 * torch.randn(d_model, d_model))
+                for _ in range(max_branch)
+            ]
+        )
+        self.base = nn.Parameter(torch.zeros(d_model))
 
-    def forward(self, depth_indices, width_indices):
+    def encode_path(self, path: list) -> torch.Tensor:
         """
         Args:
-            depth_indices: Tensor [Seq_Len, 1]
-            width_indices: Tensor [Seq_Len, 1]
+            path: list of int child indices from root to this node.
+                  []    -> root (BOS)
+                  [0]   -> first child of root
+                  [1,2] -> third child of second child of root
+        Returns:
+            Tensor of shape [d_model].
         """
-        d_idx = depth_indices.clamp(0, self.depth_embed.num_embeddings - 1)
-        w_idx = width_indices.clamp(0, self.width_embed.num_embeddings - 1)
-        d = self.depth_embed(d_idx)
-        w = self.width_embed(w_idx)
-
-        return d + w
+        enc = self.base
+        for idx in path:
+            idx = min(idx, self.max_branch - 1)
+            enc = self.down_matrices[idx] @ enc
+        return enc
