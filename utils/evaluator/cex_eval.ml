@@ -138,6 +138,10 @@ let rec eval_binop op v1 v2 =
   | "le"  -> VBool (as_int v1 <= as_int v2)
   | "gt"  -> VBool (as_int v1 > as_int v2)
   | "ge"  -> VBool (as_int v1 >= as_int v2)
+  | "+" -> VInt (as_int v1 + as_int v2)
+  | "-" -> VInt (as_int v1 - as_int v2)
+  | "*" -> VInt (as_int v1 * as_int v2)
+  | "/" -> VInt (as_int v1 / as_int v2)
   | _     -> failwith ("Unknown binop: " ^ op)
 
 and eval (env : env) spec =

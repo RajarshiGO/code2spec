@@ -56,8 +56,8 @@ class SpecEvaluator:
                     "left": left,
                     "right": right,
                 }
-            # --- ADDED THIS TO CATCH OUR DISGUISED '==>' OPERATOR ---
             elif isinstance(node, ast.BinOp):
+                # 1. Catch disguised implication (==> disguised as >>)
                 if isinstance(node.op, ast.RShift):
                     return {
                         "tag": "BinOp",
@@ -65,7 +65,17 @@ class SpecEvaluator:
                         "left": visit(node.left),
                         "right": visit(node.right),
                     }
-            # --------------------------------------------------------
+
+                # 2. Catch standard math
+                arith_map = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/"}
+                op_type = type(node.op)
+                if op_type in arith_map:
+                    return {
+                        "tag": "BinOp",
+                        "op": arith_map[op_type],
+                        "left": visit(node.left),
+                        "right": visit(node.right),
+                    }
             elif isinstance(node, ast.Call):
                 func_name = node.func.id
                 args = [visit(arg) for arg in node.args]
@@ -77,6 +87,7 @@ class SpecEvaluator:
                     "then": visit(node.body),
                     "else": visit(node.orelse),
                 }
+
             raise ValueError(f"Unsupported syntax: {ast.dump(node)}")
 
         return visit(tree)
