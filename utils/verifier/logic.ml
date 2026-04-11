@@ -50,14 +50,34 @@ let rec subst x replacement f =
   | FIsA(c, e) -> FIsA(c, subst x replacement e)
   | FField(c, i, e) -> FField(c, i, subst x replacement e)
   | FForall(binders, body) ->
-      (* Don't substitute if x is captured by this forall's binders *)
       if List.exists (fun (v, _) -> v = x) binders then f
       else FForall(binders, subst x replacement body)
   | _ -> f
 
+let rec fix_implies_prec (e : Ast.expr) : Ast.expr =
+  match e with
+  | Ast.EBinOp (Ast.Implies, left, right) ->
+      Ast.EBinOp (Ast.Implies, fix_implies_prec left, fix_implies_prec right)
+  | Ast.EBinOp (op, left, right) when op = Ast.Or || op = Ast.And ->
+      (* If the right child is an Implies, we need to lift the Implies to the top *)
+      begin match right with
+      | Ast.EBinOp (Ast.Implies, inner_left, inner_right) ->
+          let new_ante = Ast.EBinOp (op, left, inner_left) in
+          Ast.EBinOp (Ast.Implies, fix_implies_prec new_ante, fix_implies_prec inner_right)
+      | _ -> Ast.EBinOp (op, fix_implies_prec left, fix_implies_prec right)
+      end
+  | Ast.EBinOp (op, left, right) ->
+      Ast.EBinOp (op, fix_implies_prec left, fix_implies_prec right)
+  | Ast.EForall (vs, body) ->
+      Ast.EForall (vs, fix_implies_prec body)
+  | Ast.EAnnot (e, t) ->
+      Ast.EAnnot (fix_implies_prec e, t)
+  | _ -> e
+
 (* Convert AST expression to formula *)
 let rec expr_to_formula e =
-  match strip_annot e with
+  let e_fixed = fix_implies_prec e in
+  match strip_annot e_fixed with
   | EInt i -> FInt i
   | EBool b -> if b then FTrue else FFalse
   | EVar x -> FVar x
@@ -177,14 +197,9 @@ let rec to_z3 ctx var_types f =
   | FForall (binders, body) ->
       let n = List.length binders in
       let sorts = List.map (fun (_, bt) -> type_to_sort ctx bt) binders in
-      (* de Bruijn: binder i (0-indexed from left) → mk_bound (n-1-i) *)
-      (* We substitute named vars with their de Bruijn expressions BEFORE
-         translating body, so to_z3 sees FVar "u" → looks up in a de-Bruijn
-         environment rather than var_types. *)
       let db_env = List.mapi (fun i (name, bt) ->
         (name, (Quantifier.mk_bound ctx (n - 1 - i) (type_to_sort ctx bt), bt))
       ) binders in
-      (* Translate body with de Bruijn substitution *)
       let rec to_z3_db env f =
         match f with
         | FVar x ->
@@ -198,7 +213,7 @@ let rec to_z3 ctx var_types f =
                  Expr.mk_const_s ctx x sort)
         | FBinOp (op, l, r) ->
             let l' = to_z3_db env l and r' = to_z3_db env r in
-            (match op with   (* same as to_z3's BinOp cases *)
+            (match op with 
              | Plus -> Arithmetic.mk_add ctx [l'; r']
              | Minus -> Arithmetic.mk_sub ctx [l'; r']
              | Eq -> Boolean.mk_eq ctx l' r'
@@ -232,7 +247,7 @@ let rec to_z3 ctx var_types f =
       in
       let body_z3 = to_z3_db db_env body in
       let symbols = List.map (fun (name, _) -> Symbol.mk_string ctx name) binders in
-      let pattern_terms = (* collect all FApp nodes at top level for triggers *)
+      let pattern_terms = 
         let rec collect_apps acc = function
           | FApp (name, _) as app ->
               if Hashtbl.mem shape_pred_registry name then
