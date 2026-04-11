@@ -1,0 +1,8 @@
+(executable
+ (name liquid_graph)
+ (modules liquid_graph parser_frontend ast)
+ (libraries
+   compiler-libs.common    ; Typedtree, Types, Typemod, Typecore, Parse, Env, Ctype
+   compiler-libs.bytecomp  ; Compmisc
+ ))
+

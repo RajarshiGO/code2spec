@@ -100,7 +100,8 @@ let rec is_value = function
   | EAnnot (e, _) -> is_value e
   | _ -> false
 
-let rec typ_to_string_full = function
+(* Older string printing code*)
+(* let rec typ_to_string_full = function
   | RRefined(v, b, p) ->
       Printf.sprintf "{%s:%s | %s}" v (base_type_to_string b) (expr_to_string p)
   | RArrow(x, t1, t2) ->
@@ -131,8 +132,134 @@ and expr_to_string e =
 and binop_to_string = function
   | Add -> "+" | Sub -> "-" | Mul -> "*"
   | Eq -> "=" | Neq -> "!=" | Lt -> "<" | Gt -> ">" | Le -> "<=" | Ge -> ">="
+  | And -> "&&" | Or -> "||" | Div -> "/" | Implies -> "==>" *)
+
+
+(* --- 1. Terminal Colors Module --- *)
+module TermColor = struct
+  let reset = "\x1b[0m"
+  let kw    = "\x1b[1;35m" (* Bold Magenta *)
+  let ty    = "\x1b[36m"   (* Cyan *)
+  let var   = "\x1b[32m"   (* Green *)
+  let op    = "\x1b[33m"   (* Yellow *)
+  let lit   = "\x1b[31m"   (* Red *)
+  let punct = "\x1b[90m"   (* Dim Gray *)
+end
+
+let color c s = c ^ s ^ TermColor.reset
+
+let binop_to_string = function
+  | Add -> "+" | Sub -> "-" | Mul -> "*"
+  | Eq -> "=" | Neq -> "!=" | Lt -> "<" | Gt -> ">" | Le -> "<=" | Ge -> ">="
   | And -> "&&" | Or -> "||" | Div -> "/" | Implies -> "==>"
 
+(* --- 2. Advanced Pretty Printers --- *)
+let rec pp_typ ppf = function
+  | RRefined(v, b, p) ->
+      Format.fprintf ppf "@[<hov 2>%s%s %s %s %s@ %a%s@]"
+        (color TermColor.punct "{")
+        (color TermColor.var v)
+        (color TermColor.punct ":")
+        (color TermColor.ty (base_type_to_string b))
+        (color TermColor.punct "|")
+        pp_expr p
+        (color TermColor.punct "}")
+  | RArrow(x, t1, t2) ->
+      Format.fprintf ppf "@[<hov 2>%s%s%s %a %s@ %a%s@]"
+        (color TermColor.punct "(")
+        (color TermColor.var x)
+        (color TermColor.punct ":")
+        pp_typ t1
+        (color TermColor.op "->")
+        pp_typ t2
+        (color TermColor.punct ")")
+
+and pp_expr ppf e = 
+  match e with
+  | EInt n -> 
+      Format.fprintf ppf "%s" (color TermColor.lit (string_of_int n))
+  | EBool b -> 
+      Format.fprintf ppf "%s" (color TermColor.lit (string_of_bool b))
+  | EVar x -> 
+      Format.fprintf ppf "%s" (color TermColor.var x)
+  | EBinOp(op, e1, e2) ->
+      Format.fprintf ppf "@[<hov 2>%s%a@ %s %a%s@]" 
+        (color TermColor.punct "(")
+        pp_expr e1 
+        (color TermColor.op (binop_to_string op)) 
+        pp_expr e2
+        (color TermColor.punct ")")
+  | EIf(c, t, f) ->
+      Format.fprintf ppf "@[<v 2>%s %a %s@,%a@;<1 -2>%s@,%a@]" 
+        (color TermColor.kw "if") pp_expr c (color TermColor.kw "then") 
+        pp_expr t 
+        (color TermColor.kw "else") 
+        pp_expr f
+  | ELet(x, e1, e2) ->
+      Format.fprintf ppf "@[<v>@[<hov 2>%s %s %s@ %a@] %s@,%a@]" 
+        (color TermColor.kw "let") (color TermColor.var x) (color TermColor.op "=")
+        pp_expr e1 
+        (color TermColor.kw "in") 
+        pp_expr e2
+  | ELetRec(f, arg, body, rest) ->
+      Format.fprintf ppf "@[<v>@[<hov 2>%s %s %s %s@ %a@] %s@,%a@]" 
+        (color TermColor.kw "let rec") (color TermColor.var f) (color TermColor.var arg) (color TermColor.op "=")
+        pp_expr body 
+        (color TermColor.kw "in") 
+        pp_expr rest
+  | EApp(f, arg) ->
+      Format.fprintf ppf "@[<hov 2>%s%a@ %a%s@]" 
+        (color TermColor.punct "(")
+        pp_expr f pp_expr arg
+        (color TermColor.punct ")")
+  | EFun(x, body) ->
+      Format.fprintf ppf "@[<hov 2>%s%s %s %s@ %a%s@]" 
+        (color TermColor.punct "(")
+        (color TermColor.kw "fun") (color TermColor.var x) (color TermColor.op "->")
+        pp_expr body
+        (color TermColor.punct ")")
+  | EAnnot(e_inner, t) ->
+      Format.fprintf ppf "@[<hov 2>%s%a@ %s %s%s@]" 
+        (color TermColor.punct "(")
+        pp_expr e_inner 
+        (color TermColor.punct ":") 
+        (color TermColor.ty (base_type_to_string t))
+        (color TermColor.punct ")")
+  | EForall(vs, body) ->
+      Format.fprintf ppf "@[<hov 2>%s%s %s%s@ %a%s@]" 
+        (color TermColor.punct "(")
+        (color TermColor.kw "forall") (color TermColor.var (String.concat " " vs)) (color TermColor.punct ",")
+        pp_expr body
+        (color TermColor.punct ")")
+  | ECtor(n, []) -> 
+      Format.fprintf ppf "%s" (color TermColor.ty n)
+  | ECtor(n, args) ->
+      let pp_args ppf args_list =
+        let sep ppf () = Format.fprintf ppf "%s@ " (color TermColor.punct ",") in
+        Format.pp_print_list ~pp_sep:sep pp_expr ppf args_list
+      in
+      Format.fprintf ppf "@[<hov 2>%s%s%a%s@]" 
+        (color TermColor.ty n) 
+        (color TermColor.punct "(") 
+        pp_args args 
+        (color TermColor.punct ")")
+  | EMatch(scrut, cases) ->
+      let pp_case ppf (cname, vars, body) =
+        let vars_str = if vars = [] then "" else " " ^ String.concat " " (List.map (color TermColor.var) vars) in
+        Format.fprintf ppf "@[<hov 2>%s %s%s %s@ %a@]" 
+          (color TermColor.punct "|") 
+          (color TermColor.ty cname) 
+          vars_str 
+          (color TermColor.op "->") 
+          pp_expr body
+      in
+      Format.fprintf ppf "@[<v 2>%s %a %s@,%a@]" 
+        (color TermColor.kw "match") pp_expr scrut (color TermColor.kw "with")
+        (Format.pp_print_list ~pp_sep:(fun ppf () -> Format.fprintf ppf "@,") pp_case) cases
+
+(* Keep identical signatures for backward compatibility *)
+let typ_to_string_full t = Format.asprintf "%a" pp_typ t
+let expr_to_string e = Format.asprintf "%a" pp_expr e
 
 let rec subst_expr x replacement target =
   let target = strip_annot target in
@@ -273,7 +400,7 @@ let join_types t1 t2 =
   | _ -> t1
 
 
-let clean_z3_value raw_val =
+(* let clean_z3_value raw_val =
   let s = String.trim raw_val in
   if String.length s > 4
      && s.[0] = '('
@@ -288,7 +415,91 @@ let clean_z3_value raw_val =
        !ok)
     in
     if all_digits inner then "-" ^ inner else s
-  else s
+  else s *)
+
+(* --- 3. Z3 S-Expression Parser for Beautiful Counterexamples --- *)
+type z3_sexp = ZList of z3_sexp list | ZAtom of string
+
+let parse_z3_sexp s =
+  let tokens = ref [] in
+  let len = String.length s in
+  let i = ref 0 in
+  while !i < len do
+    match s.[!i] with
+    | ' ' | '\n' | '\r' | '\t' -> incr i
+    | '(' -> tokens := "(" :: !tokens; incr i
+    | ')' -> tokens := ")" :: !tokens; incr i
+    | _ ->
+        let start = !i in
+        let in_pipe = ref false in
+        while !i < len && (
+          if s.[!i] = '|' then begin in_pipe := not !in_pipe; true end
+          else if !in_pipe then true
+          else match s.[!i] with ' '|'\n'|'\r'|'\t'|'('|')' -> false | _ -> true
+        ) do incr i done;
+        tokens := String.sub s start (!i - start) :: !tokens
+  done;
+  let toks = List.rev !tokens in
+  let rec parse_list acc = function
+    | [] -> ZList (List.rev acc), []
+    | ")" :: rest -> ZList (List.rev acc), rest
+    | "(" :: rest ->
+        let sub, rest' = parse_list [] rest in
+        parse_list (sub :: acc) rest'
+    | tok :: rest -> parse_list (ZAtom tok :: acc) rest
+  in
+  match toks with
+  | "(" :: rest -> let ast, _ = parse_list [] rest in ast
+  | [tok] -> ZAtom tok
+  | _ -> ZAtom s
+
+let rec expand_z3_lets env = function
+  | ZAtom a as atom -> (try expand_z3_lets env (List.assoc a env) with Not_found -> atom)
+  | ZList [ZAtom "let"; ZList bindings; body] ->
+      let new_env = List.fold_left (fun acc b ->
+        match b with
+        | ZList [ZAtom v; val_expr] -> (v, expand_z3_lets acc val_expr) :: acc
+        | _ -> acc
+      ) env bindings in
+      expand_z3_lets new_env body
+  | ZList l -> ZList (List.map (expand_z3_lets env) l)
+
+let rec format_z3_ast = function
+  | ZAtom a ->
+      let a = if String.length a >= 2 && a.[0] = '|' && a.[String.length a - 1] = '|' then
+        String.sub a 1 (String.length a - 2) else a
+      in
+      if a = "[]" then "[]" else a
+  | ZList [ZAtom "-"; ZAtom n] -> "-" ^ n (* Clean up negative numbers like (- 1) *)
+  | ZList [ZAtom op; hd; tl] when op = "|::|" || op = "::" ->
+      let rec collect_list ast acc = match ast with
+        | ZList [ZAtom o; h; t] when o = "|::|" || o = "::" ->
+            collect_list t (format_z3_ast h :: acc)
+        | ZAtom "[]" | ZAtom "|[]|" -> Some (List.rev acc)
+        | _ -> None
+      in
+      (* If it perfectly terminates in [], print as [a; b; c]. Else print as (a :: b) *)
+      (match collect_list (ZList [ZAtom op; hd; tl]) [] with
+       | Some lst -> "[" ^ String.concat "; " lst ^ "]"
+       | None -> "(" ^ format_z3_ast hd ^ " :: " ^ format_z3_ast tl ^ ")")
+  | ZList (ZAtom ctor :: args) -> (* Format standard ADT constructors: Tree(1, 2) *)
+      let ctor_name = format_z3_ast (ZAtom ctor) in
+      ctor_name ^ "(" ^ String.concat ", " (List.map format_z3_ast args) ^ ")"
+  | ZList l -> "(" ^ String.concat " " (List.map format_z3_ast l) ^ ")"
+
+let clean_z3_value raw_val =
+  try
+    let ast = parse_z3_sexp raw_val in
+    let expanded = expand_z3_lets [] ast in
+    format_z3_ast expanded
+  with _ ->
+    (* Fallback if parsing somehow fails, keeping your original negative number logic *)
+    let s = String.trim raw_val in
+    if String.length s > 4 && s.[0] = '(' && String.sub s 0 3 = "(- " && s.[String.length s - 1] = ')' then
+      "-" ^ String.trim (String.sub s 3 (String.length s - 4))
+    else s
+
+
 
 let parse_z3_raw_output input_str =
   let buf = Buffer.create (String.length input_str) in
