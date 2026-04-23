@@ -604,6 +604,17 @@ let check_implication ctx p1 p2 =
     | Solver.V_Valid -> Valid
     | Solver.V_Invalid model_msg ->
         let raw_pairs = parse_z3_raw_output model_msg in
+        (* Source names of ho/rec auxiliary variables produced by abstraction.
+           These are internal to the verifier and must never appear in the CEX
+           returned to the caller. *)
+        let aux_source_names =
+          List.fold_left (fun acc (name, _) ->
+            let src = match Hashtbl.find_opt name_map name with
+              | Some s -> s | None -> name
+            in
+            StringSet.add src acc
+          ) StringSet.empty (ho_extras @ rec_extras)
+        in
         let best_candidates = Hashtbl.create 10 in
         List.iter (fun (fresh_name, value) ->
           let source_name = match Hashtbl.find_opt name_map fresh_name with
@@ -617,7 +628,8 @@ let check_implication ctx p1 p2 =
                 Hashtbl.replace best_candidates source_name (fresh_name, value)
         ) raw_pairs;
         let clean_cex = Hashtbl.fold (fun source_key (_, value) acc ->
-          (source_key, value) :: acc
+          if StringSet.mem source_key aux_source_names then acc
+          else (source_key, value) :: acc
         ) best_candidates [] in
         if cex_consistent_with_ctx ctx clean_cex then begin
           log "[CEX] Validated: CEX is consistent with path conditions\n";
@@ -699,6 +711,17 @@ let check_implication ctx p1 p2 =
         | Solver.V_Unknown -> Unknown
         | Solver.V_Invalid model_msg ->
           let raw_pairs = parse_z3_raw_output model_msg in
+          (* Exclude auxiliary source names from ho/rec abstraction and the
+             grounded ho pass. Witness variables (extra_vars) are intentionally
+             kept because they resolve to genuine user-variable source names. *)
+          let aux_source_names =
+            List.fold_left (fun acc (name, _) ->
+              let src = match Hashtbl.find_opt name_map name with
+                | Some s -> s | None -> name
+              in
+              StringSet.add src acc
+            ) StringSet.empty (ho_extras @ rec_extras @ ho_extras2)
+          in
           let best_candidates = Hashtbl.create 10 in
           List.iter (fun (fresh_name, value) ->
           let source_name = match Hashtbl.find_opt name_map fresh_name with
@@ -710,7 +733,9 @@ let check_implication ctx p1 p2 =
               Hashtbl.replace best_candidates source_name (fresh_name, value)
         ) raw_pairs;
         let clean_cex = Hashtbl.fold
-          (fun source_key (_fresh, value) acc -> (source_key, value) :: acc)
+          (fun source_key (_fresh, value) acc ->
+            if StringSet.mem source_key aux_source_names then acc
+            else (source_key, value) :: acc)
           best_candidates [] in
         if cex_consistent_with_ctx ctx clean_cex then begin
           log "[CEX] Validated: grounded CEX is consistent with path conditions\n";
@@ -1370,6 +1395,8 @@ let parse_precondition_with_args arg_names precond_str =
 
    let parse_spec_with_args (arg_names : string list) (spec_str : string) : Ast.expr =
      let spec_str = String.trim spec_str in
+     let spec_str = Str.global_replace (Str.regexp "!=") "<>" spec_str in
+     let spec_str = Str.global_replace (Str.regexp "~-") "-" spec_str in
      let starts_with pfx s =
        String.length s >= String.length pfx &&
        String.sub s 0 (String.length pfx) = pfx
@@ -1384,6 +1411,7 @@ let parse_precondition_with_args arg_names precond_str =
      in
 
      let implies_stub = "let (==>) (a : bool) (b : bool) = if a then b else true in " in
+     (* todo: <==> *)
 
      let fn_stubs =
        Hashtbl.fold (fun name decl acc ->
@@ -1423,7 +1451,7 @@ let parse_precondition_with_args arg_names precond_str =
        EForall (qvars, strip body_expr)
      end else begin
        let env_source =
-         shape_stubs ^ fn_stubs
+         shape_stubs ^ fn_stubs ^ implies_stub
          ^ (List.map (fun a -> Printf.sprintf "let %s = 0 in " a) arg_names |> String.concat "")
        in
        let parsed = Parser_frontend.parse_expr (env_source ^ "(" ^ spec_str ^ ")") in

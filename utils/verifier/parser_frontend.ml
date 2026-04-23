@@ -98,17 +98,30 @@ let rec translate_expr (texp : Typedtree.expression) : Ast.expr =
   | Texp_construct ({txt = Lident ctor; _}, _, args) ->
       ECtor (ctor, List.map translate_expr args)
 
+  | Texp_apply (func, [(_, Some arg)]) ->
+      begin match func.exp_desc with
+      | Texp_ident (path, _, _) ->
+          let op_name = strip_stdlib_prefix (Path.name path) in
+          if op_name = "~-" then
+            (* Transform -e into 0 - e *)
+            EBinOp (Sub, EInt 0, translate_expr arg)
+          else
+            EApp (translate_expr func, translate_expr arg)
+      | _ ->
+          EApp (translate_expr func, translate_expr arg)
+      end
+
   (* Special-case built-in binary operators *)
   | Texp_apply ({exp_desc = Texp_ident (path, _, _); _}, [(_, Some e1); (_, Some e2)])
     when
       let op_base = strip_stdlib_prefix (Path.name path) in
-      List.mem op_base ["+"; "-"; "*"; "="; "<"; ">"; "<="; ">="; "<>"; "&&"; "||"; "==>"]
+      List.mem op_base ["+"; "-"; "*"; "="; "<"; ">"; "<="; ">="; "<>"; "!="; "&&"; "||"; "==>"]
     ->
       let op_base = strip_stdlib_prefix (Path.name path) in
       let op = match op_base with
         | "+" -> Add | "-" -> Sub | "*" -> Mul
         | "==>" -> Implies
-        | "=" -> Eq | "<>" -> Neq
+        | "=" -> Eq | "<>" | "!=" -> Neq
         | "<" -> Lt | ">" -> Gt | "<=" -> Le | ">=" -> Ge
         | "&&" -> And | "||" -> Or
         | _ -> Add
@@ -207,6 +220,29 @@ let rec translate_expr (texp : Typedtree.expression) : Ast.expr =
   match texp.exp_desc with
   | Texp_function _ -> raw_expr  (* Already annotated, don't wrap again *)
   | _ -> EAnnot (raw_expr, base_ty)
+
+(* let rec fix_implies_prec (e : Ast.expr) : Ast.expr =
+  match e with
+  | Ast.EBinOp (Ast.Implies, left, right) ->
+      (* Already correct: left is the antecedent *)
+      Ast.EBinOp (Ast.Implies, fix_implies_prec left, fix_implies_prec right)
+  | Ast.EBinOp (op, left, right) when op = Ast.Or || op = Ast.And ->
+      (* Check if the right child is an Implies that should have grabbed the left *)
+      begin match right with
+      | Ast.EBinOp (Ast.Implies, inner_left, inner_right) ->
+          (* The OCaml parser grouped as: left || (inner_left ==> inner_right)
+             but we want: (left || inner_left) ==> inner_right *)
+          let new_ante = Ast.EBinOp (op, left, inner_left) in
+          Ast.EBinOp (Ast.Implies, fix_implies_prec new_ante, fix_implies_prec inner_right)
+      | _ -> Ast.EBinOp (op, fix_implies_prec left, fix_implies_prec right)
+      end
+  | Ast.EBinOp (op, left, right) ->
+      Ast.EBinOp (op, fix_implies_prec left, fix_implies_prec right)
+  | Ast.EForall (vs, body) ->
+      Ast.EForall (vs, fix_implies_prec body)
+  | Ast.EAnnot (e, t) ->
+      Ast.EAnnot (fix_implies_prec e, t)
+  | _ -> e *)
 
 (* Top-level items translation *)
 let translate_structure_item (item : Typedtree.structure_item) =
@@ -308,40 +344,60 @@ let parse_expr source =
         Format.asprintf "%a" Location.print_report (Typecore.report_error env ~loc err)))
   | e -> raise (ParseError ("Expression parse error: " ^ Printexc.to_string e))
 
-(* Parse a BSR spec string of the form:
-     "forall u v, <body>"   or   "v >= 0"  (simple, current format)
-   Returns: either a plain expr (current) or a forall-wrapped one *)
-let parse_spec_string (spec_str : string) (param_names : string list) : Ast.expr =
+
+(* let fix_implies_precedence s =
+  let s = String.trim s in
+  (* Match the first top-level "==>" not inside parentheses.
+     We use a regex that greedily captures everything before "==>". *)
+  let re = Str.regexp "\\(.*\\) ==> \\(.*\\)" in
+  if Str.string_match re s 0 then
+    let lhs = Str.matched_group 1 s |> String.trim in
+    let rhs = Str.matched_group 2 s |> String.trim in
+    (* Wrap lhs in parentheses if it contains any logical/relational operator *)
+    let needs_parens =
+      String.contains lhs '&' || String.contains lhs '|' ||
+      String.contains lhs '=' || String.contains lhs '<' ||
+      String.contains lhs '>' || String.contains lhs '!'
+    in
+    let lhs_wrapped = if needs_parens then "(" ^ lhs ^ ")" else lhs in
+    lhs_wrapped ^ " ==> " ^ rhs
+  else
+    s *)
+
+(* -------------------------------------------------------------------------- *)
+(* Updated parse_spec_string with debug output                                 *)
+(* -------------------------------------------------------------------------- *)
+
+let parse_spec_with_args (arg_names : string list) (spec_str : string) : Ast.expr =
   let spec_str = String.trim spec_str in
-  (* Check if it starts with "forall" *)
-  if String.length spec_str >= 6 &&
-     String.sub spec_str 0 6 = "forall" then begin
-    (* Parse: "forall u v, body" *)
+  (* Normalise C‑style != to OCaml <> *)
+  let spec_str = Str.global_replace (Str.regexp "!=") "<>" spec_str in
+  (* Also normalise unary minus for safety *)
+  let spec_str = Str.global_replace (Str.regexp "~-") "-" spec_str in
+
+  if String.length spec_str >= 6 && String.sub spec_str 0 6 = "forall" then begin
     let rest = String.trim (String.sub spec_str 6 (String.length spec_str - 6)) in
-    (* Split on comma to get "u v" and body *)
     let comma_idx = String.index rest ',' in
     let vars_str = String.sub rest 0 comma_idx in
     let body_str = String.sub rest (comma_idx + 1) (String.length rest - comma_idx - 1) in
     let qvars = String.split_on_char ' ' vars_str
-      |> List.map String.trim
-      |> List.filter (fun s -> s <> "") in
-    (* Build: let u = 0 in let v = 0 in <body> using params *)
+                |> List.map String.trim
+                |> List.filter (fun s -> s <> "") in
+
+    (* let corrected_body = fix_implies_precedence body_str in *)
     let env_source =
-      (List.map (fun p -> Printf.sprintf "let %s = 0 in " p) param_names
-       |> String.concat "")
-      ^ (List.map (fun q -> Printf.sprintf "let %s = 0 in " q) qvars
-         |> String.concat "")
+      (List.map (fun p -> Printf.sprintf "let %s = 0 in " p) arg_names |> String.concat "")
+      ^ (List.map (fun q -> Printf.sprintf "let %s = 0 in " q) qvars |> String.concat "")
     in
-    let full_source = env_source ^ "(" ^ String.trim body_str ^ ")" in
+    let full_source = env_source ^ "(" ^ body_str ^ ")" in
     let body_expr = parse_expr full_source in
-    (* Wrap in EForall — we add this to AST *)
+    (* let body_expr_fixed = fix_implies_prec body_expr in *)
     Ast.EForall (qvars, body_expr)
-  end else
-    parse_expr (
-      (List.map (fun p -> Printf.sprintf "let %s = 0 in " p) param_names
-       |> String.concat "")
+  end else begin
+    (* let corrected_spec = fix_implies_precedence spec_str in *)
+    let full_source =
+      (List.map (fun p -> Printf.sprintf "let %s = 0 in " p) arg_names |> String.concat "")
       ^ "(" ^ spec_str ^ ")"
-      |> (fun s ->
-          (* strip let wrappers *)
-          s)
-    )
+    in
+    parse_expr full_source
+  end

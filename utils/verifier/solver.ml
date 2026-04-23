@@ -194,8 +194,121 @@ let derive_shape_predicates (type_name : string)
 
     Z3.FuncDecl.add_rec_def ctx len_decl [x_expr] body;
 
-    log "[Solver] Derived shape predicates for '%s': %s, %s, %s\n"
-      type_name mem_name ord_name len_name
+    let mk_and_safe ctx clauses =
+        if clauses = [] then Boolean.mk_true ctx
+        else if List.length clauses = 1 then List.hd clauses
+        else Boolean.mk_and ctx clauses
+      in
+
+      let all_less_name = "all_less_" ^ type_name in
+      let all_less_decl = Z3.FuncDecl.mk_rec_func_decl_s ctx all_less_name
+        [list_sort; int_sort] bool_sort in
+      Hashtbl.replace Logic.shape_pred_registry all_less_name all_less_decl;
+
+      let all_gt_name = "all_greater_" ^ type_name in
+      let all_gt_decl = Z3.FuncDecl.mk_rec_func_decl_s ctx all_gt_name
+        [list_sort; int_sort] bool_sort in
+      Hashtbl.replace Logic.shape_pred_registry all_gt_name all_gt_decl;
+
+      (* Generate all_less body *)
+      let all_less_body =
+        List.fold_right (fun (ctor_name, args) acc ->
+          let recognizer = Hashtbl.find Logic.z3_recognizer_map ctor_name in
+          let is_match = Expr.mk_app ctx recognizer [x_expr] in
+          let field_exprs = extract_fields ctor_name args x_expr in
+
+          let int_fields = ref [] in
+          let rec_fields = ref [] in
+          List.iteri (fun i bt ->
+            let f_expr = List.nth field_exprs i in
+            if bt = RInt then int_fields := f_expr :: !int_fields
+            else if bt = RUserType type_name then rec_fields := f_expr :: !rec_fields
+          ) args;
+
+          let conds =
+            List.map (fun f -> Arithmetic.mk_lt ctx f v_expr) !int_fields @
+            List.map (fun r -> Expr.mk_app ctx all_less_decl [r; v_expr]) !rec_fields
+          in
+          Boolean.mk_ite ctx is_match (mk_and_safe ctx conds) acc
+        ) ctors (Boolean.mk_true ctx)
+      in
+      Z3.FuncDecl.add_rec_def ctx all_less_decl [x_expr; v_expr] all_less_body;
+
+      (* Generate all_greater body *)
+      let all_gt_body =
+        List.fold_right (fun (ctor_name, args) acc ->
+          let recognizer = Hashtbl.find Logic.z3_recognizer_map ctor_name in
+          let is_match = Expr.mk_app ctx recognizer [x_expr] in
+          let field_exprs = extract_fields ctor_name args x_expr in
+
+          let int_fields = ref [] in
+          let rec_fields = ref [] in
+          List.iteri (fun i bt ->
+            let f_expr = List.nth field_exprs i in
+            if bt = RInt then int_fields := f_expr :: !int_fields
+            else if bt = RUserType type_name then rec_fields := f_expr :: !rec_fields
+          ) args;
+
+          let conds =
+            List.map (fun f -> Arithmetic.mk_gt ctx f v_expr) !int_fields @
+            List.map (fun r -> Expr.mk_app ctx all_gt_decl [r; v_expr]) !rec_fields
+          in
+          Boolean.mk_ite ctx is_match (mk_and_safe ctx conds) acc
+        ) ctors (Boolean.mk_true ctx)
+      in
+      Z3.FuncDecl.add_rec_def ctx all_gt_decl [x_expr; v_expr] all_gt_body;
+
+      (* ================================================================= *)
+      (* --- 5. MAIN BST PREDICATE: is_bst_<type_name>(d) --- *)
+      (* ================================================================= *)
+      let is_bst_name = "is_bst_" ^ type_name in
+      let is_bst_decl = Z3.FuncDecl.mk_rec_func_decl_s ctx is_bst_name
+        [list_sort] bool_sort in
+      Hashtbl.replace Logic.shape_pred_registry is_bst_name is_bst_decl;
+
+      let is_bst_body =
+        List.fold_right (fun (ctor_name, args) acc ->
+          let recognizer = Hashtbl.find Logic.z3_recognizer_map ctor_name in
+          let is_match = Expr.mk_app ctx recognizer [x_expr] in
+          let field_exprs = extract_fields ctor_name args x_expr in
+
+          let int_fields = ref [] in
+          let rec_fields = ref [] in
+          List.iteri (fun i bt ->
+            let f_expr = List.nth field_exprs i in
+            if bt = RInt then int_fields := f_expr :: !int_fields
+            else if bt = RUserType type_name then rec_fields := f_expr :: !rec_fields
+          ) args;
+
+          let int_fields = List.rev !int_fields in
+          let rec_fields = List.rev !rec_fields in
+
+          let rec_bst_conds = List.map (fun r -> Expr.mk_app ctx is_bst_decl [r]) rec_fields in
+
+          let rel_conds =
+            if List.length int_fields >= 1 then
+              let val_f = List.hd int_fields in
+              match rec_fields with
+              | [left; right] ->
+                  (* It's a binary tree: left < val < right *)
+                  [ Expr.mk_app ctx all_less_decl [left; val_f];
+                    Expr.mk_app ctx all_gt_decl [right; val_f] ]
+              | [tail] ->
+                  (* Fallback: if it's a list, enforce ascending order *)
+                  [ Expr.mk_app ctx all_gt_decl [tail; val_f] ]
+              | _ -> []
+            else []
+          in
+
+          let conds = rel_conds @ rec_bst_conds in
+          Boolean.mk_ite ctx is_match (mk_and_safe ctx conds) acc
+        ) ctors (Boolean.mk_true ctx)
+      in
+      Z3.FuncDecl.add_rec_def ctx is_bst_decl [x_expr] is_bst_body;
+
+      (* Update your final log output to include the new predicates *)
+      log "[Solver] Derived shape predicates for '%s': %s, %s, %s, %s\n"
+        type_name mem_name ord_name len_name is_bst_name
 
 
 (* Register ADT with basetype *)
