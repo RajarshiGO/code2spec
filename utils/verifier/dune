@@ -1,4 +1,4 @@
 (executable
  (name main)
  (libraries z3 ocaml-compiler-libs.common str)
- (modules main parser_frontend ast logic typechecker solver))
+ (modules main parser_frontend ast logic typechecker solver pprint))

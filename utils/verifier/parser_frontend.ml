@@ -158,7 +158,7 @@ let rec translate_expr (texp : Typedtree.expression) : Ast.expr =
 
       (* Debug *)
       List.iter2 (fun pname pty ->
-        log "[Parser] Parameter '%s' has type: %s\n" pname (string_of_basetype pty)
+        log "[Parser] Parameter '%s' has type: %s\n" pname (Pprint.string_of_basetype pty)
       ) param_names param_types;
 
       (* Build nested EFun with individual annotations *)
@@ -324,7 +324,7 @@ let parse_expr source =
 
 
 (* -------------------------------------------------------------------------- *)
-(* Updated parse_spec_string with debug output                                 *)
+(* Updated parse_spec_string with debug output                                *)
 (* -------------------------------------------------------------------------- *)
 
 let parse_spec_with_args (arg_names : string list) (spec_str : string) : Ast.expr =

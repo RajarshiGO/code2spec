@@ -68,13 +68,6 @@ type ctor_info = {
 let global_ctor_env : (string, ctor_info) Hashtbl.t = Hashtbl.create 20
 let global_fn_env : (string, (string * Ast.expr)) Hashtbl.t = Hashtbl.create 20
 
-let rec base_type_to_string = function
-  | RInt -> "Int"
-  | RBool -> "Bool"
-  | RUserType s -> s
-  | RVar s -> "'" ^ s
-  | RArrow(t1, t2) -> "(" ^ base_type_to_string t1 ^ " -> " ^ base_type_to_string t2 ^ ")"
-
 let register_adt type_name ctors =
   List.iter (fun (name, args) ->
     let info = { c_name = name; c_args = args; c_parent = type_name } in
@@ -102,37 +95,9 @@ let rec is_value = function
 
 let rec typ_to_string_full = function
   | RRefined(v, b, p) ->
-      Printf.sprintf "{%s:%s | %s}" v (base_type_to_string b) (expr_to_string p)
+      Printf.sprintf "{%s:%s | %s}" v (Pprint.string_of_basetype b) (Pprint.string_of_expr p)
   | RArrow(x, t1, t2) ->
       Printf.sprintf "(%s:%s -> %s)" x (typ_to_string_full t1) (typ_to_string_full t2)
-
-and expr_to_string e =
-  match e with
-  | EInt n -> string_of_int n
-  | EBool b -> string_of_bool b
-  | EVar x -> x
-  | EBinOp(op, e1, e2) ->
-      Printf.sprintf "(%s %s %s)" (expr_to_string e1) (binop_to_string op) (expr_to_string e2)
-  | EIf(c, t, e) ->
-      Printf.sprintf "(if %s then %s else %s)" (expr_to_string c) (expr_to_string t) (expr_to_string e)
-  | ELet(x, e1, e2) ->
-      Printf.sprintf "(let %s = %s in %s)" x (expr_to_string e1) (expr_to_string e2)
-  | EApp(f, arg) ->
-      Printf.sprintf "(%s %s)" (expr_to_string f) (expr_to_string arg)
-  | EFun(x, body) ->
-      Printf.sprintf "(fun %s -> %s)" x (expr_to_string body)
-  | EAnnot(e, _) ->
-      expr_to_string e
-  | EForall (vs, e) ->
-      Printf.sprintf "(forall %s, %s)"
-        (String.concat " " vs) (expr_to_string e)
-  | _ -> "..."
-
-and binop_to_string = function
-  | Add -> "+" | Sub -> "-" | Mul -> "*"
-  | Eq -> "=" | Neq -> "!=" | Lt -> "<" | Gt -> ">" | Le -> "<=" | Ge -> ">="
-  | And -> "&&" | Or -> "||" | Div -> "/" | Implies -> "==>" | Iff -> "<==>"
-
 
 let rec subst_expr x replacement target =
   let target = strip_annot target in
@@ -525,7 +490,7 @@ let abstract_recursive_apps rec_fnames var_types _p1 query =
   end
 
 let check_implication ctx p1 p2 =
-  log "[Debug] check_implication: p2 = %s\n" (expr_to_string p2);
+  log "[Debug] check_implication: p2 = %s\n" (Pprint.string_of_expr p2);
   let var_types =
       let seen = Hashtbl.create 16 in
       List.filter_map (fun (x, t) ->
@@ -560,7 +525,7 @@ let check_implication ctx p1 p2 =
       let holds = Logic.expr_to_formula p1 in
       proof_obligations := {
         po_id       = fresh_po_id ();
-        po_label    = expr_to_string p2;
+        po_label    = Pprint.string_of_expr p2;
         po_path     = path;
         po_holds    = holds;
         po_goal     = Logic.expr_to_formula p2;
@@ -581,12 +546,12 @@ let check_implication ctx p1 p2 =
     let p2_logic = expr_to_formula p2 in
     let raw_query = FBinOp(Implies, FBinOp(And, assumption, p1_logic), p2_logic) in
     log "[Debug] vartypes before filter: [%s]\n"
-      (String.concat "; " (List.map (fun (n, t) -> n ^ ":" ^ base_type_to_string t) var_types));
+      (String.concat "; " (List.map (fun (n, t) -> n ^ ":" ^ Pprint.string_of_basetype t) var_types));
     let var_types = List.filter (fun (name, _) ->
       not (Hashtbl.mem Logic.registered_functions name)
     ) var_types in
     log "[Debug] vartypes after filter: [%s]\n"
-      (String.concat "; " (List.map (fun (n, t) -> n ^ ":" ^ base_type_to_string t) var_types));
+      (String.concat "; " (List.map (fun (n, t) -> n ^ ":" ^ Pprint.string_of_basetype t) var_types));
     let query, ho_extras = abstract_ho_apps var_types raw_query in
     let var_types = var_types @ ho_extras in
     let rec_fnames = List.filter_map (fun (k, _) ->
@@ -761,7 +726,7 @@ let rec is_subtype ctx t1 t2 =
       else
         let p2_renamed = subst_expr v2 (EVar v1) p2 in
         log "[Debug] is_subtype: p1 = %s, p2_renamed = %s\n"
-          (expr_to_string p1) (expr_to_string p2_renamed);
+          (Pprint.string_of_expr p1) (Pprint.string_of_expr p2_renamed);
         let ctx' = add_to_ctx ctx v1 (RRefined(v1, b1, p1)) in
         let ctx_enriched = List.fold_left (fun acc_ctx var ->
           match lookup_ctx ctx var with
@@ -969,13 +934,13 @@ let rec beta_reduce expr =
 
 let rec beta_reduce_all expr =
   let expr = strip_annot expr in
-  log "[BetaReduce] Processing: %s\n" (expr_to_string expr);
+  log "[BetaReduce] Processing: %s\n" (Pprint.string_of_expr expr);
   match expr with
   | EApp(f, arg) ->
       log "[BetaReduce] Reducing function and argument\n";
       let f' = beta_reduce_all f in
       let arg' = beta_reduce_all arg in
-      log "[BetaReduce] After reduction, f' = %s\n" (expr_to_string f');
+      log "[BetaReduce] After reduction, f' = %s\n" (Pprint.string_of_expr f');
       (match strip_annot f' with
        | EFun(param, body) ->
            log "[BetaReduce] Found lambda! Substituting %s\n" param;
@@ -1053,7 +1018,7 @@ let rec term_type_infer ctx term =
               log "[Debug] Found '%s' with arrow type\n" x;
               arr_ty
           | Some (RRefined(_, b, _)) ->
-              log "[Debug] Found '%s' with refined type: %s\n" x (base_type_to_string b);
+              log "[Debug] Found '%s' with refined type: %s\n" x (Pprint.string_of_basetype b);
               RRefined("v", b, EBinOp(Eq, EVar "v", EVar x))
           | None ->
               log "[Debug] Variable '%s' NOT FOUND in context!\n" x;
@@ -1377,7 +1342,7 @@ and term_type_check ctx e target =
         )
 
 and typ_to_string = function
-  | RRefined (v, b, _) -> Printf.sprintf "{%s:%s | ...}" v (base_type_to_string b)
+  | RRefined (v, b, _) -> Printf.sprintf "{%s:%s | ...}" v (Pprint.string_of_basetype b)
   | RArrow (x, t1, t2) -> Printf.sprintf "(%s:%s -> %s)" x (typ_to_string t1) (typ_to_string t2)
 
 let parse_precondition_with_args arg_names precond_str =
@@ -1496,7 +1461,7 @@ let verify program spec_str precond_str_opt =
               (match val_expr with
                | Ast.EAnnot(Ast.EFun(pname, _), ty) ->
                    log "[Verify] Helper has EAnnot(EFun('%s', ...), %s)\n"
-                     pname (string_of_basetype ty)
+                     pname (Pprint.string_of_basetype ty)
                | Ast.EFun(pname, _) ->
                    log "[Verify] Helper has bare EFun('%s', ...) NO ANNOTATION\n" pname
                | _ -> log "[Verify] Helper is not a function...\n"
@@ -1573,7 +1538,7 @@ let verify program spec_str precond_str_opt =
         | Ast.DLet (name, args, val_expr) ->
             log "[Info] Verifying target: '%s'\n" name;
             let spec = parse_spec_with_args args spec_str in
-            log "[Debug] Parsed spec: %s\n" (expr_to_string spec);
+            log "[Debug] Parsed spec: %s\n" (Pprint.string_of_expr spec);
             let full_expr = val_expr in
 
             begin match full_expr with
@@ -1609,7 +1574,7 @@ let verify program spec_str precond_str_opt =
               in
               infer_from_expr spec
             in
-            log "[Info] Inferred type from spec: %s\n" (base_type_to_string spec_base_type);
+            log "[Info] Inferred type from spec: %s\n" (Pprint.string_of_basetype spec_base_type);
 
             let rec prepare_check ctx func_name e arg_names remaining_arrow =
               (match e with
@@ -1617,9 +1582,9 @@ let verify program spec_str precond_str_opt =
                      log "[Verify] Matched nested EAnnot - double wrapped!\n"
                  | Ast.EAnnot(Ast.EFun(name, _), ty) ->
                      log "[Verify] Matched EAnnot(EFun('%s', ...), %s)\n"
-                       name (string_of_basetype ty)
+                       name (Pprint.string_of_basetype ty)
                  | Ast.EAnnot(e', ty) ->
-                     log "[Verify] Matched EAnnot(<other>, %s)\n" (string_of_basetype ty);
+                     log "[Verify] Matched EAnnot(<other>, %s)\n" (Pprint.string_of_basetype ty);
                      (match e' with
                       | Ast.EFun(n, _) -> log "[Verify]    Inner is EFun('%s')\n" n
                       | _ -> log "[Verify]    Inner is NOT EFun\n")
@@ -1673,7 +1638,7 @@ let verify program spec_str precond_str_opt =
                   let ctx' = add_to_ctx ctx arg_name arg_ty in
                   prepare_check ctx' func_name body (arg_name :: arg_names) None
               | body, _ ->
-                  log "[Debug] In base case, spec = %s\n" (expr_to_string spec);
+                  log "[Debug] In base case, spec = %s\n" (Pprint.string_of_expr spec);
                   (ctx, body, List.rev arg_names)
             in
             let (ctx_body, body_expr, arg_names) = prepare_check ctx_with_deps name full_expr [] None in
@@ -1688,7 +1653,7 @@ let verify program spec_str precond_str_opt =
             let target_type = RRefined("v", target_base, spec) in
             let body_beta_reduced = beta_reduce body_expr in
             let body_fully_reduced = beta_reduce_all body_beta_reduced in
-            log "[Debug] Fully reduced body: %s\n" (expr_to_string body_fully_reduced);
+            log "[Debug] Fully reduced body: %s\n" (Pprint.string_of_expr body_fully_reduced);
 
             let ctx_final =
               if is_recursive name body_fully_reduced then begin
@@ -1911,7 +1876,7 @@ let verify program spec_str precond_str_opt =
     let sub_specs   = decompose_spec spec_expr in
     let total       = List.length sub_specs in
     let sub_spec_results = List.mapi (fun i ss ->
-      let ss_label = expr_to_string ss in
+      let ss_label = Pprint.string_of_expr ss in
       let any_pass = List.exists (fun ob ->
         let instantiated =
           Logic.expr_to_formula (subst_expr "v" (EVar ob.po_ret_var) ss) in

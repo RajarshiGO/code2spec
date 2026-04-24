@@ -92,16 +92,16 @@ let rec strip_annot (e : expr) : expr =
   | e -> e
 
 (* Pretty printer for types *)
-let rec string_of_basetype = function
+(* let rec string_of_basetype = function
   | RInt -> "int"
   | RBool -> "bool"
   | RUserType s -> s
   | RVar s -> s
   | RArrow (t1, t2) ->
-      Printf.sprintf "(%s -> %s)" (string_of_basetype t1) (string_of_basetype t2)
+      Printf.sprintf "(%s -> %s)" (string_of_basetype t1) (string_of_basetype t2) *)
 
 (* Pretty printer for expressions (simplified) *)
-let rec string_of_expr e =
+(* let rec string_of_expr e =
   match e with
   | EAnnot (e, t) -> Printf.sprintf "(%s : %s)" (string_of_expr e) (string_of_basetype t)
   | EInt i -> string_of_int i
@@ -111,4 +111,4 @@ let rec string_of_expr e =
   | EForall (vs, e) ->
       Printf.sprintf "(forall %s, %s)"
         (String.concat " " vs) (string_of_expr e)
-  | _ -> "expr"
+  | _ -> "expr" *)
