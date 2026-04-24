@@ -26,14 +26,14 @@ type ob_kind =
   | ReturnPoint
 
 type proof_obligation = {
-  po_id       : int;
-  po_label    : string;
-  po_path     : Logic.formula;
-  po_holds    : Logic.formula;
-  po_goal     : Logic.formula;
-  po_kind     : ob_kind;
-  po_vartypes : (string * basetype) list;
-  po_ret_var : string;
+  po_id        : int;
+  po_label     : string;
+  po_path      : Logic.formula;
+  po_holds     : Logic.formula;
+  po_goal      : Logic.formula;
+  po_kind      : ob_kind;
+  po_vartypes  : (string * basetype) list;
+  po_ret_var   : string;
 }
 
 let proof_obligations : proof_obligation list ref = ref []
@@ -131,7 +131,7 @@ and expr_to_string e =
 and binop_to_string = function
   | Add -> "+" | Sub -> "-" | Mul -> "*"
   | Eq -> "=" | Neq -> "!=" | Lt -> "<" | Gt -> ">" | Le -> "<=" | Ge -> ">="
-  | And -> "&&" | Or -> "||" | Div -> "/" | Implies -> "==>"
+  | And -> "&&" | Or -> "||" | Div -> "/" | Implies -> "==>" | Iff -> "<==>"
 
 
 let rec subst_expr x replacement target =
@@ -1104,7 +1104,7 @@ let rec term_type_infer ctx term =
           let t1 = term_type_infer ctx e1 in
           let t2 = term_type_infer ctx e2 in
           let ret_ty_base = match op with
-            | Ast.Eq | Ast.Neq | Ast.Lt | Ast.Gt | Ast.Le | Ast.Ge | Ast.And | Ast.Or -> RBool
+            | Ast.Eq | Ast.Neq | Ast.Lt | Ast.Gt | Ast.Le | Ast.Ge | Ast.And | Ast.Or | Ast.Implies | Ast.Iff -> RBool
             | _ -> RInt
           in
           let result_var = fresh_name "v" in
@@ -1411,7 +1411,7 @@ let parse_precondition_with_args arg_names precond_str =
      in
 
      let implies_stub = "let (==>) (a : bool) (b : bool) = if a then b else true in " in
-     (* todo: <==> *)
+     let iff_stub = "let (<==>) (a : bool) (b : bool) = a = b in " in
 
      let fn_stubs =
        Hashtbl.fold (fun name decl acc ->
@@ -1441,7 +1441,7 @@ let parse_precondition_with_args arg_names precond_str =
        let qvars = String.split_on_char ' ' vars_str
          |> List.map String.trim |> List.filter (fun s -> s <> "") in
        let env_source =
-         shape_stubs ^ fn_stubs ^ implies_stub                                                      (* ← NEW *)
+         shape_stubs ^ fn_stubs ^ implies_stub ^ iff_stub
          ^ (List.map (fun a -> Printf.sprintf "let %s = 0 in " a) arg_names |> String.concat "")
          ^ (List.map (fun q -> Printf.sprintf "let %s = 0 in " q) qvars  |> String.concat "")
        in
@@ -1451,7 +1451,7 @@ let parse_precondition_with_args arg_names precond_str =
        EForall (qvars, strip body_expr)
      end else begin
        let env_source =
-         shape_stubs ^ fn_stubs ^ implies_stub
+         shape_stubs ^ fn_stubs ^ implies_stub ^ iff_stub
          ^ (List.map (fun a -> Printf.sprintf "let %s = 0 in " a) arg_names |> String.concat "")
        in
        let parsed = Parser_frontend.parse_expr (env_source ^ "(" ^ spec_str ^ ")") in
@@ -1621,8 +1621,8 @@ let verify program spec_str precond_str_opt =
                  | Ast.EAnnot(e', ty) ->
                      log "[Verify] Matched EAnnot(<other>, %s)\n" (string_of_basetype ty);
                      (match e' with
-                      | Ast.EFun(n, _) -> log "[Verify]   Inner is EFun('%s')\n" n
-                      | _ -> log "[Verify]   Inner is NOT EFun\n")
+                      | Ast.EFun(n, _) -> log "[Verify]    Inner is EFun('%s')\n" n
+                      | _ -> log "[Verify]    Inner is NOT EFun\n")
                  | Ast.EFun(name, _) ->
                      log "[Verify] Matched bare EFun('%s', ...) - NO ANNOTATION!\n" name
                  | _ ->
@@ -1661,7 +1661,7 @@ let verify program spec_str precond_str_opt =
                   end
 
               | Ast.EFun(arg_name, body), Some (RArrow(_, t_arg, t_ret)) ->
-                  let t_arg_concrete = instantiate_type_vars t_arg in  (* AND HERE! *)
+                  let t_arg_concrete = instantiate_type_vars t_arg in
                   let ctx' = add_to_ctx ctx arg_name t_arg_concrete in
                   prepare_check ctx' func_name body (arg_name :: arg_names) (Some t_ret)
               | Ast.EFun(arg_name, body), _ ->
@@ -1683,7 +1683,7 @@ let verify program spec_str precond_str_opt =
             in
             let target_base = match val_expr with
               | Ast.EAnnot (_, bt) -> final_base_type bt
-              | _                   -> spec_base_type
+              | _                  -> spec_base_type
             in
             let target_type = RRefined("v", target_base, spec) in
             let body_beta_reduced = beta_reduce body_expr in
@@ -1895,122 +1895,6 @@ let verify program spec_str precond_str_opt =
     if ob.po_ret_var = "v" then f
     else Logic.subst ob.po_ret_var (Logic.FVar "v") f
 
-  (* let rec pretty_formula = function
-    | Logic.FTrue  -> "⊤"
-    | Logic.FFalse -> "⊥"
-    | Logic.FInt i -> string_of_int i
-    | Logic.FVar x -> x
-    | Logic.FNot f -> log "¬(%s)" (pretty_formula f)
-    | Logic.FBinOp(Logic.And,     l, r) ->
-        log "(%s ∧ %s)" (pretty_formula l) (pretty_formula r)
-    | Logic.FBinOp(Logic.Or,      l, r) ->
-        log "(%s ∨ %s)" (pretty_formula l) (pretty_formula r)
-    | Logic.FBinOp(Logic.Implies, l, r) ->
-        log "(%s → %s)" (pretty_formula l) (pretty_formula r)
-    | Logic.FBinOp(Logic.Eq,  l, r) ->
-        log "%s = %s"  (pretty_formula l) (pretty_formula r)
-    | Logic.FBinOp(Logic.Neq, l, r) ->
-        log "%s ≠ %s"  (pretty_formula l) (pretty_formula r)
-    | Logic.FBinOp(Logic.Lt,  l, r) ->
-        log "%s < %s"  (pretty_formula l) (pretty_formula r)
-    | Logic.FBinOp(Logic.Le,  l, r) ->
-        log "%s ≤ %s"  (pretty_formula l) (pretty_formula r)
-    | Logic.FBinOp(Logic.Gt,  l, r) ->
-        log "%s > %s"  (pretty_formula l) (pretty_formula r)
-    | Logic.FBinOp(Logic.Ge,  l, r) ->
-        log "%s ≥ %s"  (pretty_formula l) (pretty_formula r)
-    | Logic.FForall(binders, body) ->
-        let vs = String.concat " " (List.map fst binders) in
-        log "∀%s. %s" vs (pretty_formula body)
-    | Logic.FApp(f, args) ->
-        log "%s(%s)" f (String.concat ", " (List.map pretty_formula args))
-    | Logic.FCtor(c, [])   -> c
-    | Logic.FCtor(c, args) ->
-        log "%s(%s)" c (String.concat ", " (List.map pretty_formula args))
-    | f -> Logic.string_of_formula f   (* fallback *)
-
-  let pretty_print_constraints obligations =
-    if obligations = [] then ()
-    else begin
-      print_endline "\n╔═══════════════════════════════════════╗";
-      print_endline   "║ SubSpec: Verification Constraints     ║";
-      print_endline   "╚═══════════════════════════════════════╝";
-      let idx = ref 0 in
-      List.iter (fun ob ->
-        let path_f  = rename_ret ob ob.po_path  in
-        let holds_f = rename_ret ob ob.po_holds in
-        let goal_f  = rename_ret ob ob.po_goal  in
-
-        let path_parts  = flatten_and path_f  in
-        let holds_parts = flatten_and holds_f in
-        let goal_parts  = flatten_and goal_f  in
-
-        let is_forall  = function Logic.FForall _ -> true | _ -> false in
-        let is_ret_def = function
-          | Logic.FBinOp(Logic.Eq, Logic.FVar "v", _) -> true | _ -> false in
-
-        let ihs        = List.filter is_forall  holds_parts in
-        let ret_defs   = List.filter is_ret_def holds_parts in
-        let other_h    = List.filter
-                           (fun f -> not (is_forall f) && not (is_ret_def f))
-                           holds_parts in
-
-        let case_name = match path_parts with
-          | [Logic.FBinOp(Logic.Eq, Logic.FVar _, Logic.FCtor(c, _))] ->
-              if c = "Leaf" || c = "[]" then "Base Case"
-              else log "Recursive Case  [t = %s(...)]" c
-          | _ -> "Case" in
-
-        List.iter (fun g ->
-          incr idx;
-          Printf.printf "\n┌─ [%d] %s\n" !idx case_name;
-
-          if path_parts <> [] then
-          if path_parts <> [] then begin
-            let holds_set = List.map Logic.string_of_formula (flatten_and holds_f) in
-            let is_in_holds f = List.mem (Logic.string_of_formula f) holds_set in
-            let is_ih_fact = function
-              | Logic.FBinOp(_, Logic.FApp(f, _), _)
-              | Logic.FBinOp(_, _, Logic.FApp(f, _)) -> Hashtbl.mem global_fn_env f
-              | _ -> false
-            in
-            let is_precond = function
-              | Logic.FBinOp((Logic.Ge | Logic.Le | Logic.Gt | Logic.Lt), Logic.FVar _, _) -> true
-              | _ -> false
-            in
-            let display_path = List.filter
-              (fun f -> not (is_in_holds f) && not (is_ih_fact f))
-              path_parts
-            in
-            let branch_conds, pre_conds = List.partition
-              (fun f -> not (is_precond f)) display_path
-            in
-            let ordered_path = branch_conds @ pre_conds in
-            if ordered_path <> [] then
-              Printf.printf "│  Path  : %s\n"
-                (String.concat " ∧ " (List.map pretty_formula ordered_path))
-          end;
-
-          List.iter (fun f ->
-            Printf.printf "│  Fact  : %s\n" (pretty_formula f)
-          ) other_h;
-
-          List.iteri (fun i f ->
-            Printf.printf "│  IH[%d] : %s\n" (i + 1) (pretty_formula f)
-          ) ihs;
-
-          List.iter (fun f ->
-            Printf.printf "│  Defn  : %s\n" (pretty_formula f)
-          ) ret_defs;
-
-          Printf.printf "│  %s\n" (String.concat "" (List.init 45 (fun _ -> "─")));
-          Printf.printf "└  SubSpec : %s\n" (pretty_formula g);
-
-        ) goal_parts
-      ) (List.rev obligations);
-      print_endline ""
-    end *)
-
   let check_sub_spec (program : Ast.declaration list) (spec_str : string) (precond_str_opt : string option) : int * int * (string * bool) list =
     proof_obligations := [];
     po_counter := 0;
@@ -2019,7 +1903,6 @@ let verify program spec_str precond_str_opt =
     sub_spec_mode := false;
     Hashtbl.clear Logic.uninterpreted_func_map;
     let obligations = !proof_obligations in
-    (* pretty_print_constraints !proof_obligations; *)
     let arg_names = match List.rev program with
       | Ast.DLet(_, args, _) :: _ -> args
       | _ -> []

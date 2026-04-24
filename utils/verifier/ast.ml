@@ -17,6 +17,7 @@ type binop =
   | Eq | Neq | Lt | Le | Gt | Ge
   | And | Or
   | Implies
+  | Iff  (* <-- Added Iff here! *)
 
 (* Expressions with embedded base types *)
 (* Every node carries its OCaml base type *)
@@ -69,7 +70,7 @@ let rec get_type (e : expr) : basetype =
   | EBinOp (op, _, _) ->
       (match op with
        | Add | Sub | Mul | Div -> RInt
-       | _ -> RBool)
+       | _ -> RBool) (* Iff falls under here and correctly returns RBool *)
   | EIf (_, t, _) -> get_type t (* Assume branches match *)
   | _ -> RInt (* Fallback/Unknown *)
 

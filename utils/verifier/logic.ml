@@ -18,7 +18,7 @@ let shape_pred_registry : (string, Z3.FuncDecl.func_decl) Hashtbl.t = Hashtbl.cr
 type op =
   | Plus | Minus | Mult | Div
   | Eq | Neq | Lt | Le | Gt | Ge
-  | And | Or | Implies
+  | And | Or | Implies | Iff (* Added Iff here *)
 
 type formula =
   | FTrue | FFalse
@@ -38,6 +38,7 @@ let binop_to_op = function
   | Eq -> Eq | Neq -> Neq | Lt -> Lt | Le -> Le | Gt -> Gt | Ge -> Ge
   | And -> And | Or -> Or
   | Implies -> Implies
+  | Iff -> Iff (* Added mapping from Ast.Iff to Logic.Iff *)
 
 let rec subst x replacement f =
   match f with
@@ -158,6 +159,7 @@ let rec to_z3 ctx var_types f =
       | And -> Boolean.mk_and ctx [l_z3; r_z3]
       | Or -> Boolean.mk_or ctx [l_z3; r_z3]
       | Implies -> Boolean.mk_implies ctx l_z3 r_z3
+      | Iff -> Boolean.mk_iff ctx l_z3 r_z3 (* Added Z3 iff mapping here *)
       end
   | FNot f -> Boolean.mk_not ctx (to_z3 ctx var_types f)
   | FIte (c, t, e) ->
@@ -231,6 +233,7 @@ let rec to_z3 ctx var_types f =
              | And -> Boolean.mk_and ctx [l'; r']
              | Or  -> Boolean.mk_or  ctx [l'; r']
              | Implies -> Boolean.mk_implies ctx l' r'
+             | Iff -> Boolean.mk_iff ctx l' r' (* Added Z3 iff mapping here too *)
              | _ -> to_z3 ctx var_types f)
         | FNot f' -> Boolean.mk_not ctx (to_z3_db env f')
         | FApp (name, args) ->
@@ -286,7 +289,7 @@ let rec string_of_formula = function
       let sop = match op with
         | Plus -> "+" | Minus -> "-" | Mult -> "*" | Div -> "/"
         | Eq -> "=" | Neq -> "!=" | Lt -> "<" | Le -> "<=" | Gt -> ">" | Ge -> ">="
-        | And -> "&&" | Or -> "||" | Implies -> "=>"
+        | And -> "&&" | Or -> "||" | Implies -> "=>" | Iff -> "<==>" (* Added string formatting here *)
       in
       Printf.sprintf "(%s %s %s)" (string_of_formula l) sop (string_of_formula r)
   | FNot f -> Printf.sprintf "(not %s)" (string_of_formula f)
